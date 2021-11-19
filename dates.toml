@@ -1,0 +1,19 @@
+[2021.12.31]
+name = "Silvester"
+
+
+[2022]
+01.01.name = "Neujahr"
+01.01.free = true
+01.06 = "3 Könige"
+02.14 = "Valentinstag"
+02.28 = "Rosenmontag"
+
+# TODO this would work with 1.0 toml
+# [2022.01.01]
+# name = "Neujahr"
+# free = true
+
+
+
+

@@ -1,0 +1,30 @@
+[package]
+name = "photocal"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = "0.4.19"
+clap = "3.0.0-beta.5"
+font-kit = "0.10.1"
+lazy_static = "1.4.0"
+rusttype = "0.9.2"
+serde_yaml = "0.8.21"
+textwidth = "2.1.0"
+toml = "0.5.8"
+serde_with = "1.10.0"
+anyhow = "1.0.47"
+
+[dependencies.serde]
+version = "1.0.130"
+features = ["derive"]
+
+[dependencies.svg]
+git = "https://github.com/ModProg/svg"
+branch = "tspan"
+
+[dependencies.const_format]
+version= "0.2.22"
+features=["fmt"]
