@@ -4,7 +4,8 @@
     const_fn_floating_point_arithmetic
 )]
 #![cfg_attr(test, feature(assert_matches))]
-use std::{collections::HashMap, fmt::Display, fs, ops::Deref, path::PathBuf, str::FromStr};
+use std::{collections::{HashMap, HashSet}, fmt::Display, fs, ops::Deref, path::{Path, PathBuf}, result, str::FromStr};
+use image::{DynamicImage, io::Reader as ImageReader};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use clap::*;
@@ -12,15 +13,10 @@ use colors::Color;
 use font_kit::{family_name::FamilyName, properties::Properties, source::SystemSource};
 use lazy_static::lazy_static;
 use rusttype::{point, Scale};
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::{self, Visitor}};
 use serde_with::{serde_as, DisplayFromStr};
-use svg::{
-    node::{
-        self,
-        element::{Circle, Group, Rectangle, TSpan, Text},
-    },
-    Document, Node,
-};
+use split_iter::Splittable;
+use svg::{Document, Node, node::{self, element::{Circle, Group, Image, Rectangle, TSpan, Text}}, save};
 
 mod colors;
 
@@ -46,6 +42,7 @@ type HolidayConfig = HashMap<String, Holidays>;
 struct Holidays {
     name: String,
     color: Color,
+    #[serde(default)]
     holidays: Vec<DateRange>
 }
 
@@ -64,15 +61,46 @@ trait HolidayConfigImpl {
     fn get_labels(&self) -> Vec<(&Color, &str)>;
     fn get_on_date(&self, date:NaiveDate) -> Vec<&Color>;
 }
-    
 
-type SpecialDays = HashMap<N<i32>, HashMap<N, HashMap<N, SpecialDay>>>;
+#[derive(Deserialize, Debug)]
+struct SpecialDays{general: Feiertage, birthdays:HashMap<String, String>}
+#[derive(Debug)]
+struct Feiertage(HashMap<NaiveDate, SpecialDay>);
 
-impl GetSpecialDay for SpecialDays{
+impl<'de> Deserialize<'de> for Feiertage {
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de> {
+        struct Vis;
+
+        impl<'de> Visitor<'de> for Vis {
+            type Value = Feiertage;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a map with string keys.")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut vec = HashMap::new();
+                while let Some((key, value)) = map.next_entry::<String,String>()? {
+                    let (flags,date) = key.chars().split(|c|('0'..='9').contains(c)||'-'==*c);
+                    vec.insert(NaiveDate::from_str(&date.collect::<String>()).unwrap(),SpecialDay::Full{name:value,free:flags.collect()});
+                }
+
+                Ok(Feiertage(vec))
+            }
+        }
+
+        deserializer.deserialize_map(Vis)
+    }
+}
+
+impl GetSpecialDay for Feiertage{
     fn get_special_day(&self, day: NaiveDate) -> Option<&SpecialDay> {
-        self.get(&day.year().into())
-            .and_then(|y| y.get(&day.month().into()))
-            .and_then(|m| m.get(&day.day().into()))
+        self.0.get(&day)
     }
 }
 
@@ -112,21 +140,21 @@ impl<T> From<T> for N<T> {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 enum SpecialDay {
     Simple(String),
     Full {
         name: String,
         #[serde(default)]
-        free: bool,
+        free: HashSet<char>,
     },
 }
 
 impl SpecialDay {
-    fn free(&self) -> bool {
+    fn free(&self, free_markers: &[char]) -> bool {
         match self {
-            SpecialDay::Full { free, .. } => *free,
+            SpecialDay::Full { free, .. } => free_markers.iter().any(|c|free.contains(c)),
             _ => false,
         }
     }
@@ -143,7 +171,7 @@ impl Display for SpecialDay {
 const PAGE_HEIGHT: f32 = 297.;
 const PAGE_WIDTH: f32 = 210.;
 const MARGIN: f32 = 5.;
-const MARKER_STYLE: &str = "fill:none;stroke:black;stroke-width:0.3;stroke-dasharray:0.5, 1;";
+const MARKER_STYLE: &str = "fill:none;stroke:none;stroke-width:0.3;stroke-dasharray:0.5, 1;";
 const TITLE_MARGIN_TOP: f32 = 20.;
 const TITLE_FONT_SIZE: f32 = 20.;
 const FONT_NAME: &str = "Noto Sans";
@@ -156,26 +184,27 @@ const IMAGE_HEIGHT: f32 = 90.;
 const IMAGE_WIDTH: f32 = 130.;
 
 const HOLLIDAYS_LABEL: &str = "Ferien:";
-// const HOLLIDAYS: &[(Color, &str)] = &[
-//     (Color::rgb(0, 0, 0xE7), "Adrian"),
-//     // (Color::rgb(r, g, b)"#feda00", "Silvia"),
-//     // (Color::rgb(r, g, b)"#06cc00", "Rufus & Karl"),
-//     // (Color::rgb(r, g, b)"#0000ff", "Roland"),
-//     // (Color::rgb(r, g, b)"#00e5d4", "Lea"),
-// ];
 #[derive(clap::Parser)]
 struct Opts {
     #[clap(short, long, arg_enum, case_insensitive = true)]
-    month: Month,
+    month: Option<Month>,
     #[clap(short, long)]
     year: u16,
     #[clap(short, long)]
     special_days: PathBuf,
     #[clap(short, long)]
     holidays: PathBuf,
+    #[clap(short, long, default_value="F")]
+    free_markers: String,
+    #[clap(short, long, default_value="./out")]
+    outdir: PathBuf,
+    #[clap(short, long, default_value="./imgs")]
+    images: PathBuf,
+
 }
 
 #[derive(ArgEnum, Clone, Copy, Debug)]
+#[repr(u8)]
 enum Month {
     #[clap(alias("jan"))]
     Januar = 1,
@@ -183,6 +212,8 @@ enum Month {
     Februar,
     #[clap(alias("mar"))]
     März,
+    #[clap(alias("apr"))]
+    April,
     #[clap(alias("may"))]
     Mai,
     #[clap(alias("jun"))]
@@ -204,28 +235,52 @@ enum Month {
 fn main() {
     let opts: Opts = Opts::parse();
 
-    let special_days: SpecialDays =
+    let SpecialDays{general: special_days, ..} =
         toml::from_str(&fs::read_to_string(opts.special_days).unwrap()).unwrap();
     let holidays: HolidayConfig =
         toml::from_str(&fs::read_to_string(opts.holidays).unwrap()).unwrap();
 
-    let document = Document::new()
-        .set("viewBox", (0, 0, PAGE_WIDTH, PAGE_HEIGHT))
-        .set("width", format!("{}mm", PAGE_WIDTH))
-        .set("height", format!("{}mm", PAGE_HEIGHT))
-        .add(title(opts.month))
-        .add(markers())
-        .add(footer(&holidays))
-        .add(body(opts.year, opts.month, &special_days, &holidays));
 
-    // svg::save("test.svg", &document).unwrap(;
-    let txt = format!(
+    if let Some(month) = opts.month{
+        let document = document(&holidays, month, opts.year, &special_days, &opts.free_markers.chars().collect::<Vec<char>>(), &opts.images);
+let txt = 
+        format!(
         r#"<?xml version="1.0" standalone="no" ?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
 {document}"#
     );
-    // eprintln!("{txt}");
-    println!("{txt}");
+        println!("{txt}");
+    }else{
+        for month in 1..=12u8 {
+            println!("Month: {}:", month);
+            let document = document(&holidays, unsafe { ::std::mem::transmute(month) }, opts.year, &special_days, &opts.free_markers.chars().collect::<Vec<char>>(), &opts.images);
+            save(opts.outdir.join(format!("{:02}.svg", month)), &document).unwrap();
+            
+        }
+    }
+}
+
+fn document(holidays: &HolidayConfig, month: Month, year: u16, special_days: &Feiertage, free_markers:&[char], img_dir:&Path) ->Document{
+
+    let img = ImageReader::open(img_dir.join(format!("{:02}.png", month as u8))).unwrap().decode().unwrap();
+
+    // let document = 
+        Document::new()
+        .set("viewBox", (0, 0, PAGE_WIDTH, PAGE_HEIGHT))
+        .set("width", format!("{}mm", PAGE_WIDTH))
+        .set("height", format!("{}mm", PAGE_HEIGHT))
+        .add(title(month))
+        .add(markers())
+        .add(image(&img))
+        .add(footer(holidays))
+        .add(body(year, month, special_days, holidays, free_markers))
+
+//     format!(
+//         r#"<?xml version="1.0" standalone="no" ?>
+// <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+// {document}"#
+//     )
+
 }
 
 fn title(month: Month) -> Text {
@@ -262,6 +317,20 @@ fn markers() -> Group {
                 .set("width", IMAGE_WIDTH)
                 .set("height", IMAGE_HEIGHT),
         )
+}
+
+fn image(img: &DynamicImage) -> Image{
+    let mut buf = vec![];
+img.write_to(&mut buf, image::ImageOutputFormat::Png).unwrap();
+let res_base64 = base64::encode(&buf);
+
+    Image::new()
+                .set("x", (PAGE_WIDTH - IMAGE_WIDTH) / 2.)
+                .set("y", TITLE_MARGIN_TOP + TITLE_FONT_SIZE)
+                .set("width", IMAGE_WIDTH)
+                .set("height", IMAGE_HEIGHT)
+                .set("preserveAspectRatio", "xMidYMid")
+                .set("xlink:href", format!("data:image/png;base64,{}",&res_base64))
 }
 
 fn footer(holidays: &HolidayConfig) -> Text {
@@ -326,7 +395,7 @@ const DAY_FONT_SIZE: f32 = 6.;
 const INFO_FONT_SIZE: f32 = 4.;
 const LINE_WIDTH: f32 = 0.3;
 
-fn body(year: u16, month: Month, special_days: &SpecialDays, holidays: &HolidayConfig) -> Group {
+fn body(year: u16, month: Month, special_days: &Feiertage, holidays: &HolidayConfig, free_markers:&[char]) -> Group {
     let week_num_width = width_of("00", WEEK_NUM_FONT_SIZE) + 2.;
     let column_width = (BODY_WIDTH - week_num_width) / 7.;
     let row_height = (BODY_HEIGHT - WEEK_DAY_FONT_SIZE) / 6.;
@@ -381,7 +450,7 @@ fn body(year: u16, month: Month, special_days: &SpecialDays, holidays: &HolidayC
             let mut x = week_num_width;
             for day in week.iter_days().take(7) {
                 let special_day = special_days.get_special_day(day);
-                let special = day.weekday() == Weekday::Sun || special_day.map(|sd| sd.free()).unwrap_or(false);
+                let special = day.weekday() == Weekday::Sun || special_day.map(|sd| sd.free(free_markers)).unwrap_or(false);
                 let (color, text_color) = match( day.month() == month as u32,  special) {
                     (true, false) => (Color::BLACK, Color::BLACK),
                     (true, true) => (Color::BLACK, Color::DARK_GRAY),
@@ -402,7 +471,11 @@ fn body(year: u16, month: Month, special_days: &SpecialDays, holidays: &HolidayC
                 let count = holiday_colors.len() as f32;
                 let mut color_x = x;
                 for color in holiday_colors{
-                    let color = color.to_string_na();
+                    let color = if day.month() == month as u32 {
+                            *color
+                        } else{
+                            color.with_opacity(0.5).alpha_over(Color::WHITE)
+                        }.to_string_na();
                     row.append(
                         Rectangle::new()
                         .set(
@@ -415,7 +488,6 @@ fn body(year: u16, month: Month, special_days: &SpecialDays, holidays: &HolidayC
                         .set("x", color_x),
                         );
                     color_x += column_width/count;
-                    dbg!(color_x);
                 }
                 row.append(
                     Rectangle::new()

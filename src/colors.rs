@@ -103,7 +103,6 @@ impl FromStr for Color {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        dbg!(s.len());
         match s.len() {
             4 => Self::from_str(&(s.to_owned() + "F")),
             5 => Self::from_str(&{
