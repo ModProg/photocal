@@ -15,7 +15,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     result,
-    str::FromStr,
+    str::FromStr, mem,
 };
 
 use chrono::{Datelike, NaiveDate, Weekday};
@@ -330,7 +330,7 @@ fn main() -> Result {
             println!("Month: {month}:");
             let document = document(
                 &holidays,
-                unsafe { ::std::mem::transmute(month) },
+                unsafe { mem::transmute(month) }, // SAFE: because I said so
                 year,
                 &special_days,
             &free_markers,
