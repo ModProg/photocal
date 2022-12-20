@@ -1,6 +1,6 @@
 #![feature(
     const_fmt_arguments_new,
-    const_fn_floating_point_arithmetic, is_some_and, btree_drain_filter
+    const_fn_floating_point_arithmetic, is_some_and
 )]
 #![allow(clippy::too_many_arguments)]
 #![cfg_attr(test, feature(assert_matches))]
@@ -302,7 +302,7 @@ fn main() -> Result {
 
     let holiday_marksers: HashSet<_> = holiday_markers.into_iter().collect();
 
-    holidays.drain_filter(|key,_| !holiday_marksers.contains(key)).count();
+    holidays.retain(|key,_| holiday_marksers.contains(key));
 
     if let Some(month) = month {
         let document = document(
