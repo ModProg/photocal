@@ -302,7 +302,7 @@ fn main() -> Result {
 
     let holiday_marksers: HashSet<_> = holiday_markers.into_iter().collect();
 
-    holidays.drain_filter(|key,_| holiday_marksers.contains(key));
+    holidays.drain_filter(|key,_| !holiday_marksers.contains(key)).count();
 
     if let Some(month) = month {
         let document = document(
