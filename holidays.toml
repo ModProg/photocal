@@ -1,11 +1,11 @@
-[ro]
+[r]
 name = "Roland"
 color = "0000ff"
 
-[[ro.holidays]]
+[[r.holidays]]
 start = "2021-12-18"
 end = "2022-01-02"
 
-[[ro.holidays]]
+[[r.holidays]]
 start = "2022-01-29"
 end = "2022-04-04"
